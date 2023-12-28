@@ -3,10 +3,6 @@
 #include <QtOpenGL/QtOpenGL>
 #include <QtOpenGL/QGLFramebufferObject>
 
-#include "glsl/nv_math.h"
-#include "glsl/nv_math_types.h"
-#include "glsl/nv_math_glsltypes.h"
-#include "glsl/common.h"
 #ifdef __APPLE__
 #include <gl3.h>
 #include <gl3ext.h>
@@ -25,7 +21,6 @@ std::string glsl_path = "roboschool/cpp-household/glsl"; // outside namespace
 namespace SimpleRender {
 
 using namespace Household;
-using namespace nv_math;
 
 static float line_vertex[] = {
 +1,+1,0, -1,+1,0,
@@ -82,28 +77,35 @@ std::string read_file(const std::string& fn)
 	return str;
 }
 
-shared_ptr<QGLShaderProgram> load_program(const std::string& vert_fn, const std::string& geom_fn, const std::string& frag_fn, const char* defines)
+shared_ptr<QGLShaderProgram> load_program(
+	const std::string& vert_fn, const std::string& geom_fn, const std::string& frag_fn,
+	const char* vert_defines, const char* geom_defines, const char* frag_defines)
 {
 	shared_ptr<QGLShaderProgram> prog(new QGLShaderProgram);
-	//std::string common_header = read_file(glsl_path + "/common.h");
-	std::string common_header =
-	"#define UBO_SCENE     0\n"
-	"#define AO_RANDOMTEX_SIZE 4\n";
+	std::string common_header;
 
-	common_header = "#version 410\n" + common_header;
-	if (defines) common_header += defines;
 	if (!vert_fn.empty()) {
 		std::string vert_prog_text = read_file(glsl_path + "/" + vert_fn);
+		common_header = "";
+		if (vert_defines) common_header += vert_defines;
 		prog->addShaderFromSourceCode(QGLShader::Vertex, (common_header + vert_prog_text).c_str());
+		if (!prog->log().isEmpty())
+			fprintf(stderr, "%s LOG: '%s'\n", vert_fn.c_str(), prog->log().toUtf8().data());
 	}
 
 	if (!geom_fn.empty()) {
 		std::string geom_prog_text = read_file(glsl_path + "/" + geom_fn);
+		common_header = "";
+		if (geom_defines) common_header += geom_defines;
 		prog->addShaderFromSourceCode(QGLShader::Geometry, (common_header + geom_prog_text).c_str());
+		if (!prog->log().isEmpty())
+			fprintf(stderr, "%s LOG: '%s'\n", geom_fn.c_str(), prog->log().toUtf8().data());
 	}
 
 	if (!frag_fn.empty()) {
 		std::string frag_prog_text = read_file(glsl_path + "/" + frag_fn);
+		common_header = "";
+		if (frag_defines) common_header += frag_defines;
 		prog->addShaderFromSourceCode(QGLShader::Fragment, (common_header + frag_prog_text).c_str());
 		if (!prog->log().isEmpty())
 			fprintf(stderr, "%s LOG: '%s'\n", frag_fn.c_str(), prog->log().toUtf8().data());
@@ -164,10 +166,16 @@ void Context::load_missing_textures()
 	while (1) {
 		bool did_anything = false;
 		for (auto i=world->klass_cache.begin(); i!=world->klass_cache.end(); ++i) {
-			if (i->second.expired()) {
+			shared_ptr<ThingyClass> klass = i->second.lock();
+			if (!klass) {
 				world->klass_cache.erase(i);
 				did_anything = true;
 				break;
+			}
+			shared_ptr<ShapeDetailLevels> v = klass->shapedet_visual;
+			if (v->load_later_on) {
+				v->load_later_on = false;
+				load_model(v, v->load_later_fn, 1, v->load_later_transform);
 			}
 		}
 		if (!did_anything) break;
@@ -259,7 +267,8 @@ void Context::initGL()
 	location_zpos = program_hud->uniformLocation("zpos");
 
 #ifdef USE_SSAO
-	_hbao_init();
+	if (ssao_enable)
+		ssao_enable = _hbao_init();
 #endif
 	assert(glGetError() == GL_NO_ERROR);
 }
@@ -319,6 +328,7 @@ VAO::~VAO()  { glDeleteVertexArrays(1, &handle); }
 void ContextViewport::_render_single_object(const shared_ptr<Household::ShapeDetailLevels>& m, uint32_t options, int detail, const QMatrix4x4& at_pos)
 {
 	const std::vector<shared_ptr<Shape>>& shapes = m->detail_levels[detail];
+
 	int cnt = shapes.size();
 	for (int c=0; c<cnt; c++) {
 		shared_ptr<Shape> t = shapes[c];
@@ -490,7 +500,7 @@ void ContextViewport::paint(float user_x, float user_y, float user_z, float whee
 	glClear(GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
 
 	double xmin, xmax;
-	xmax = near * tanf(hfov * nv_to_rad * 0.5);
+	xmax = near * tanf(hfov * M_PI / 180 * 0.5);
 	xmin = -xmax;
 	QMatrix4x4 projection;
 	projection.frustum(xmin, xmax, xmin*H/W, xmax*H/W, near, far);
@@ -535,7 +545,7 @@ void ContextViewport::paint(float user_x, float user_y, float user_z, float whee
 	cx->program_tex->release();
 
 #ifdef USE_SSAO
-	if (ssao_enable) {
+	if (cx->ssao_enable) {
 		_hbao_prepare(projection.data());
 		_depthlinear_paint(0);
 		_ssao_run(0);
@@ -644,8 +654,6 @@ void ContextViewport::hud_print(const QRect& r, const QString& msg_text, uint32_
 	hud_update(r);
 }
 
-} // namespace
-
 void opengl_init_before_app(const boost::shared_ptr<Household::World>& wref)
 {
 	QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL, true);
@@ -657,44 +665,76 @@ void opengl_init_before_app(const boost::shared_ptr<Household::World>& wref)
 	fmt.setVersion(4, 1);
 	QSurfaceFormat::setDefaultFormat(fmt);
 	QApplication::setApplicationDisplayName("Roboschool");
-	wref->cx.reset(new SimpleRender::Context(wref));
-	wref->cx->fmt = fmt;
 }
 
 void opengl_init(const boost::shared_ptr<Household::World>& wref)
 {
-	wref->cx->surf = new QOffscreenSurface();
-	wref->cx->surf->setFormat(wref->cx->fmt);
-	wref->cx->surf->create();
+	boost::shared_ptr<SimpleRender::Context>& cx = wref->cx;
+	cx.reset(new SimpleRender::Context(wref));
+	cx->fmt = QSurfaceFormat::defaultFormat();
+	
+	cx->surf = new QOffscreenSurface();
+	cx->surf->setFormat(cx->fmt);
+	cx->surf->create();
 
 	// This doesn't work no matter how you put it -- widgets do not share context.
 	// QOpenGLContext::areSharing() is reporting true, put you can't reference framebuffers or VAOs.
 	if (1) {
 		QOpenGLContext* glcx = QOpenGLContext::globalShareContext();
-		QSurfaceFormat fmt1 = wref->cx->fmt;
-		QSurfaceFormat fmt2 = glcx->format();
-		assert( fmt1.majorVersion() == fmt2.majorVersion() );
-		assert( fmt1.minorVersion() == fmt2.minorVersion() );
-		assert( fmt1.profile() == fmt2.profile() );
-		wref->cx->glcx = glcx;
+		QSurfaceFormat fmt_req = cx->fmt;
+		QSurfaceFormat fmt_got = glcx->format();
+		int got_version = fmt_got.majorVersion()*1000 + fmt_got.minorVersion();
+		bool ok_without_shadows = got_version >= 3003;
+		bool ok_all_features    = got_version >= 4001;
+		if (!ok_without_shadows) {
+			fprintf(stderr, "\n\nCannot initialize OpenGL context.\n");
+			fprintf(stderr, "Requested version: %i.%i\n", fmt_req.majorVersion(), fmt_req.minorVersion());
+			fprintf(stderr, "Actual version: %i.%i\n", fmt_got.majorVersion(), fmt_got.minorVersion());
+			fprintf(stderr, "(it must be at least 3.3 to work)\n");
+			fprintf(stderr, "For possible fixes, see:\n\nhttps://github.com/openai/roboschool/issues/2\n\n");
+			assert(0);
+		}
+		cx->glcx = glcx;
+		cx->ssao_enable = ok_all_features;
+		cx->glcx->makeCurrent(cx->surf);
 	} else {
-		wref->cx->dummy_openglwidget = new QOpenGLWidget();
-		wref->cx->dummy_openglwidget->setFormat(wref->cx->fmt);
-		wref->cx->dummy_openglwidget->makeCurrent();
-		wref->cx->dummy_openglwidget->show();
-		QOpenGLContext* glcx = wref->cx->dummy_openglwidget->context();
+		cx->dummy_openglwidget = new QOpenGLWidget();
+		cx->dummy_openglwidget->setFormat(cx->fmt);
+		cx->dummy_openglwidget->makeCurrent();
+		cx->dummy_openglwidget->show();
+		QOpenGLContext* glcx = cx->dummy_openglwidget->context();
 		assert(glcx);
-		glcx->makeCurrent(wref->cx->surf);
+		glcx->makeCurrent(cx->surf);
 
 		QOpenGLWidget* test = new QOpenGLWidget();
-		test->setFormat(wref->cx->fmt);
+		test->setFormat(cx->fmt);
 		test->show();
 		test->context() ;
 		bool hurray = QOpenGLContext::areSharing(
 			glcx,
 			test->context());
-		wref->cx->glcx = glcx;
+		cx->glcx = glcx;
 		assert(hurray);
 	}
 }
 
+void opengl_init_existing_app(const boost::shared_ptr<Household::World>& wref)
+{
+	wref->cx.reset(new SimpleRender::Context(wref));
+	wref->cx->fmt = QSurfaceFormat::defaultFormat();
+	
+	wref->cx->surf = new QOffscreenSurface();
+	wref->cx->surf->setFormat(wref->cx->fmt);
+	wref->cx->surf->create();
+
+	QOpenGLContext* glcx = QOpenGLContext::globalShareContext();
+	QSurfaceFormat fmt_got = glcx->format();
+	int got_version = fmt_got.majorVersion()*1000 + fmt_got.minorVersion();
+	bool ok_all_features    = got_version >= 4001;
+
+	wref->cx->glcx = glcx;
+	wref->cx->ssao_enable = ok_all_features;
+	wref->cx->glcx->makeCurrent(wref->cx->surf);
+}
+
+} // namespace

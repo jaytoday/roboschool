@@ -1,6 +1,8 @@
 import gym, gym.spaces, gym.utils, gym.utils.seeding
 import numpy as np
 import os
+import warnings
+
 
 class RoboschoolMujocoXmlEnv(gym.Env):
     """
@@ -18,22 +20,23 @@ class RoboschoolMujocoXmlEnv(gym.Env):
     VIDEO_H = 400
 
     def __init__(self, model_xml, robot_name, action_dim, obs_dim):
+        warnings.warn("roboschool has been deprecated in favor of PyBullet, see https://github.com/openai/roboschool#news")
         self.scene = None
 
         high = np.ones([action_dim])
-        self.action_space = gym.spaces.Box(-high, high)
+        self.action_space = gym.spaces.Box(-high, high, dtype=np.float32)
         high = np.inf*np.ones([obs_dim])
-        self.observation_space = gym.spaces.Box(-high, high)
-        self._seed()
+        self.observation_space = gym.spaces.Box(-high, high, dtype=np.float32)
+        self.seed()
 
         self.model_xml = model_xml
         self.robot_name = robot_name
 
-    def _seed(self, seed=None):
+    def seed(self, seed=None):
         self.np_random, seed = gym.utils.seeding.np_random(seed)
         return [seed]
 
-    def _reset(self):
+    def reset(self):
         if self.scene is None:
             self.scene = self.create_single_player_scene()
         if not self.scene.multiplayer:
@@ -58,7 +61,7 @@ class RoboschoolMujocoXmlEnv(gym.Env):
                     self.cpp_robot = r
                     self.robot_body = part
             for j in r.joints:
-                if dump: print("\tALL JOINTS '%s' limits = %+0.2f..%+0.2f effort=%0.3f speed=%0.3f" % (j.name, *j.limits()))
+                if dump: print("\tALL JOINTS '%s' limits = %+0.2f..%+0.2f effort=%0.3f speed=%0.3f" % ((j.name,) + j.limits()) )
                 if j.name[:6]=="ignore":
                     j.set_motor_torque(0)
                     continue
@@ -74,10 +77,9 @@ class RoboschoolMujocoXmlEnv(gym.Env):
         self.camera = self.scene.cpp_world.new_camera_free_float(self.VIDEO_W, self.VIDEO_H, "video_camera")
         return s
 
-    def _render(self, mode, close):
-        if close:
-            return
+    def render(self, mode='human'):
         if mode=="human":
+            self.scene.human_render_detected = True
             return self.scene.cpp_world.test_window()
         elif mode=="rgb_array":
             self.camera_adjust()
@@ -91,9 +93,6 @@ class RoboschoolMujocoXmlEnv(gym.Env):
         return 0
 
     def HUD(self, s, a, done):
-        self.frame  += 1
-        self.done   += done   # 2 == 1+True
-        self.reward += sum(self.rewards)
         active = self.scene.actor_is_active(self)
         if active and self.done<=2:
             self.scene.cpp_world.test_window_history_advance()
@@ -105,5 +104,4 @@ class RoboschoolMujocoXmlEnv(gym.Env):
             if active:
                 self.scene.cpp_world.test_window_score(s)
             #self.camera.test_window_score(s)  # will appear on video ("rgb_array"), but not on cameras istalled on the robot (because that would be different camera)
-
 

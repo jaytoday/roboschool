@@ -5,6 +5,11 @@ import numpy as np
 import os, sys
 
 class RoboschoolInvertedDoublePendulum(RoboschoolMujocoXmlEnv):
+    '''
+    Two-link continuous control version of classic cartpole problem.
+    Keep two-link pendulum upright by moving the 1-D cart.
+    Similar to MuJoCo InvertedDoublePendulum task.
+    '''
     def __init__(self):
         RoboschoolMujocoXmlEnv.__init__(self, 'inverted_double_pendulum.xml', 'cart', action_dim=1, obs_dim=9)
 
@@ -39,7 +44,7 @@ class RoboschoolInvertedDoublePendulum(RoboschoolMujocoXmlEnv):
             np.cos(gamma), np.sin(gamma), gamma_dot,
             ])
 
-    def _step(self, a):
+    def step(self, a):
         self.apply_action(a)
         self.scene.global_step()
         state = self.calc_state()  # sets self.pos_x self.pos_y
@@ -52,6 +57,9 @@ class RoboschoolInvertedDoublePendulum(RoboschoolMujocoXmlEnv):
         alive_bonus = 10
         done = self.pos_y + 0.3 <= 1
         self.rewards = [float(alive_bonus), float(-dist_penalty), float(-vel_penalty)]
+        self.frame  += 1
+        self.done   += done   # 2 == 1+True
+        self.reward += sum(self.rewards)
         self.HUD(state, a, done)
         return state, sum(self.rewards), done, {}
 
@@ -59,9 +67,14 @@ class RoboschoolInvertedDoublePendulum(RoboschoolMujocoXmlEnv):
         self.camera.move_and_look_at(0,1.2,1.2, 0,0,0.5)
 
 class RoboschoolInvertedPendulum(RoboschoolMujocoXmlEnv):
-    swingup = False
-
-    def __init__(self):
+    '''
+    Continuous control version of classic cartpole problem.
+    Keep a pole upright by moving the 1-D cart.
+    Similar to MuJoCo InvertedPendulum task. Has an optional version
+    where the pole starts pointing downward and needs to be swung up and kept that way.
+    '''
+    def __init__(self, swingup=False):
+        self.swingup = swingup
         RoboschoolMujocoXmlEnv.__init__(self, 'inverted_pendulum.xml', 'cart', action_dim=1, obs_dim=5)
 
     def create_single_player_scene(self):
@@ -88,7 +101,7 @@ class RoboschoolInvertedPendulum(RoboschoolMujocoXmlEnv):
             np.cos(self.theta), np.sin(self.theta), theta_dot
             ])
 
-    def _step(self, a):
+    def step(self, a):
         self.apply_action(a)
         self.scene.global_step()
         state = self.calc_state()  # sets self.pos_x self.pos_y
@@ -100,6 +113,9 @@ class RoboschoolInvertedPendulum(RoboschoolMujocoXmlEnv):
             reward = 1.0
             done = np.abs(self.theta) > .2
         self.rewards = [float(reward)]
+        self.frame  += 1
+        self.done   += done   # 2 == 1+True
+        self.reward += sum(self.rewards)
         self.HUD(state, a, done)
         return state, sum(self.rewards), done, {}
 

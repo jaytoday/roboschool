@@ -13,6 +13,8 @@ struct Context;
 class ContextViewport;
 }
 
+struct App;
+
 namespace Household {
 
 using boost::shared_ptr;
@@ -85,6 +87,9 @@ struct MaterialNamespace {
 };
 
 struct ShapeDetailLevels {
+	bool load_later_on = false;
+	std::string load_later_fn;
+	btTransform load_later_transform;
 	shared_ptr<MaterialNamespace> materials;
 	std::vector<shared_ptr<Shape>> detail_levels[DETAIL_LEVELS];
 };
